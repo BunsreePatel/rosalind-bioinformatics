@@ -10,8 +10,8 @@ warnings.filterwarnings("ignore")
 
 # --- PATHS ---
 BASE_DIR = Path(r"C:\Users\meeko\rosalind-bioinformatics\multispecific_antibodies\Whole_mAb")
-PDB_DIR = BASE_DIR / "PDB_Output_Files_GPU_Full"
-OUTPUT_CSV = BASE_DIR / "Whole_mab_Structure_Based_Aggregation_Risk.csv"
+PDB_DIR = BASE_DIR / "PDB_ColabFold_Fab_Outputs"
+OUTPUT_CSV = BASE_DIR / "Whole_mab_Structure_Based_Aggregation_Predictor.csv"
 MASTER_CSV = BASE_DIR / "TheraSAbDab_SeqStruc_07Dec2025.csv"
 
 
