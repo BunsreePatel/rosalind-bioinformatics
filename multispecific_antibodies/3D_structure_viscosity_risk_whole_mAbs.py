@@ -119,7 +119,6 @@ def extract_chain_features(structure):
         for chain in model:
             c_id = chain.get_id()
             residues = list(chain.get_residues())
-            chain_residues[c_id] = len(residues)
 
             total_sasa = sum(getattr(res, 'sasa', 0) for res in residues)
             hydro_sasa = sum(getattr(res, 'sasa', 0) for res in residues if res.get_resname() in HYDROPHOBIC_RESIDUES)
