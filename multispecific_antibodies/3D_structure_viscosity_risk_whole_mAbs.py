@@ -138,6 +138,7 @@ def extract_chain_features(structure):
                 "Hydro_SASA": round(hydro_sasa, 2),
                 "Net_Charge": round(net_charge, 1),
                 "Max_Hydro_Patch": round(max_patch_sasa, 2),
+                "Num_Residues": len(residues),
             }
 
     return chain_features
