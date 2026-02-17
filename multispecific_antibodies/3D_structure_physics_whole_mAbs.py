@@ -53,7 +53,9 @@ CHARGE_SCALE = {
     'ARG': 1.0, 'LYS': 1.0, 'HIS': 0.1,  # Positive
     'ASP': -1.0, 'GLU': -1.0,            # Negative
 }
-PATCH_WINDOW = 5  # Sliding window for hydrophobic patches
+PATCH_WINDOW = 5  # Sliding window for hydrophobic patches (examines 5 consecutive residues at a time, if all 5 residues are hydrophobic, the segment is considered a "patch")
+"""The literature (Sharma 2014, Jain 2017) often uses 4-6 residues for hydrophobic patch detection.
+5 is a reasonable compromise: small enough to catch meaningful patches, large enough to ignore tiny “random” clusters."""
 
 def run_3D_physics_analysis():
     if not PDB_DIR.exists():
