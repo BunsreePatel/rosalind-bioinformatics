@@ -114,6 +114,7 @@ def compute_sasa(structure):
 
 def extract_chain_features(structure):
     chain_features = {}
+    chain_residues = {}
 
     for model in structure:
         for chain in model:
@@ -220,4 +221,4 @@ def run_3D_viscosity_analysis():
     print(f"File saved to: {OUTPUT_CSV}")
 
 if __name__ == "__main__":
-    run_3D_viscosity_analysis
+    run_3D_viscosity_analysis()
