@@ -1,11 +1,15 @@
 import os
 import warnings
 import pandas as pd
-import string
 from pathlib import Path
 from tqdm import tqdm
+from collections import Counter
 from Bio.PDB import PDBParser
 from Bio.PDB.SASA import ShrakeRupley
+import numpy as np
+from scipy.spatial.distance import pdist, squareform
+from scipy.cluster.hierarchy import fcluster, linkage
+from collections import Counter
 
 warnings.filterwarnings("ignore")
 
@@ -21,6 +25,12 @@ if not BASE_DIR.exists():
 """
 THEORY & BACKGROUND: STRUCTURE-BASED IN SILICO ANTIBODY VISCOSITY RISK PROFILING
 ===============================================
+1. Viscosity (η) in protein solutions increases with concentration due to intermolecular forces. 
+For monoclonal antibodies (mAbs), high viscosity (>20 cP at 150 mg/mL) is a major developability issue, often linked to self-association or aggregation.
+Structure-based prediction focuses on surface features that mediate these interactions, as buried residues don't contribute. 
+The tiers build on each other: Tier 1 is fast/computational but approximate; Tier 2 is more accurate but computationally intensive; Tier 3 is the most predictive but data-dependent.
+    - Tier 1 -
+
 
 1. SOLVENT ACCESSIBLE SURFACE AREA (SASA) & THE SHRAKE-RUPLEY ALGORITHM
   - Theory: SASA measures the surface area of a biomolecule accessible to solvent. 
@@ -90,27 +100,190 @@ THEORY & BACKGROUND: STRUCTURE-BASED IN SILICO ANTIBODY VISCOSITY RISK PROFILING
     
 """
 
-# --- BIOPHYSICAL SCALES ---
+# --- BIOPHYSICAL SCALES AND CONSTANTS ---
 STANDARD_AAS = sorted("ACDEFGHIKLMNPQRSTVWY")
 HYDROPHOBIC_RESIDUES = ['ALA', 'VAL', 'ILE', 'LEU', 'MET', 'PHE', 'TYR', 'TRP']
+POSITIVE_RESIDUES = ['ARG', 'LYS', 'HIS']
+NEGATIVE_RESIDUES = ['ASP', 'GLU']
 CHARGE_SCALE = {
     'ARG': 1.0, 'LYS': 1.0, 'HIS': 0.1,  # Positive
     'ASP': -1.0, 'GLU': -1.0,            # Negative
 }
-PATCH_WINDOW = 5  # Sliding window for hydrophobic patches (examines 5 consecutive residues at a time, if all 5 residues are hydrophobic, the segment is considered a "patch")
-"""The literature (Sharma 2014, Jain 2017) often uses 4-6 residues for hydrophobic patch detection.
-5 is a reasonable compromise: small enough to catch meaningful patches, large enough to ignore tiny “random” clusters."""
+SASA_THRESHOLD = 5.0  # Å² Minimum SASA for surface exposure **NEED TO LOOK THIS UP IN LITERATURE
+CLUSTER_DISTANCE = 10.0  # Å for spatial patch clustering **NEED TO LOOK THIS UP IN LITERATURE
 
-# --- PDB STRUCTURE LOADING & SASA COMPUTATION ---
 def load_pdb_structure(pdb_path: Path):
+    # Load a .pdb structure file using Bio.PDB.
     parser = PDBParser(QUIET=True)
     structure = parser.get_structure(pdb_path.stem, pdb_path)
     return structure
 
 def compute_sasa(structure):
+    # Compute Solvent Accessible Surface Area (SASA) for the structure
     sr = ShrakeRupley()
     sr.compute(structure, level="R")  # level="R" attaches .sasa to residues
     return structure
+
+def get_residue_center(residue):
+    # Get the center of mass of a residue.
+    atoms = list(residue.get_atoms())
+    if not atoms:
+        return None
+    coords = np.array([atom.get_coord() for atom in atoms])
+    return np.mean(coords, axis=0)
+
+def calculate_spatial_hydrophobic_patches(residues, distance_cutoff=CLUSTER_DISTANCE, sasa_threshold=SASA_THRESHOLD):
+    # Calculate hydrophobic patches using 3D spatial clustering; returns the maximum patch SASA.
+    surface_hydros = [(i, getattr(res, 'sasa', 0), get_residue_center(res)) 
+                     for i, res in enumerate(residues) 
+                     if res.get_resname() in HYDROPHOBIC_RESIDUES and getattr(res, 'sasa', 0) > sasa_threshold and get_residue_center(res) is not None]
+    
+    if len(surface_hydros) < 2:
+        return 0.0
+    
+    # Extract 3D centers and cluster
+    centers = np.array([h[2] for h in surface_hydros])
+    
+    # Find clusters using distance cutoff
+    if len(centers) > 1:
+        Z = linkage(centers, method='single')
+        clusters = fcluster(Z, distance_cutoff, criterion='distance')
+    else:
+        clusters = [1]
+    
+    # Calculate max patch SASA
+    cluster_sasas = {}
+    for idx, cluster_id in enumerate(clusters):
+        if cluster_id not in cluster_sasas:
+            cluster_sasas[cluster_id] = 0
+        cluster_sasas[cluster_id] += surface_hydros[idx][1]
+    
+    return max(cluster_sasas.values()) if cluster_sasas else 0.0
+
+def calculate_spatial_neg_charge_patches(residues, distance_cutoff=CLUSTER_DISTANCE, sasa_threshold=SASA_THRESHOLD):
+    # Calculate charge patches using 3D spatial clustering; returns the maximum negative patch size (number of residues).
+    surface_neg = [(i, res.get_resname(), get_residue_center(res)) 
+                      for i, res in enumerate(residues) 
+                      if res.get_resname() in NEGATIVE_RESIDUES and getattr(res, 'sasa', 0) > sasa_threshold and get_residue_center(res) is not None]
+    
+    if len(surface_neg) < 2:
+        return 0
+
+    centers = np.array([c[2] for c in surface_neg])
+    #CHECK THIS FORMULA [1] OR [2]??
+    if len(centers) > 1:
+        Z = linkage(centers, method='single')
+        clusters = fcluster(Z, distance_cutoff, criterion='distance')
+    else:
+        clusters = [1]
+    
+    cluster_sizes = Counter(clusters)
+    return max(cluster_sizes.values()) if cluster_sizes else 0
+
+def calculate_spatial_pos_charge_patches(residues, distance_cutoff=CLUSTER_DISTANCE, sasa_threshold=SASA_THRESHOLD):
+    # Calculate charge patches using 3D spatial clustering; returns the maximum positive patch size (number of residues).
+    surface_pos = [(i, res.get_resname(), get_residue_center(res)) 
+                      for i, res in enumerate(residues) 
+                      if res.get_resname() in POSITIVE_RESIDUES and getattr(res, 'sasa', 0) > sasa_threshold and get_residue_center(res) is not None]
+    
+    if len(surface_pos) < 2:
+        return 0
+
+    centers = np.array([c[2] for c in surface_neg])
+    #CHECK THIS FORMULA [1] OR [2]??
+    if len(centers) > 1:
+        Z = linkage(centers, method='single')
+        clusters = fcluster(Z, distance_cutoff, criterion='distance')
+    else:
+        clusters = [1]
+    
+    cluster_sizes = Counter(clusters)
+    return max(cluster_sizes.values()) if cluster_sizes else 0
+
+def calculate_charge_dipole_moment(residues, distance_cutoff=CLUSTER_DISTANCE, sasa_threshold=SASA_THRESHOLD):
+    charges = []
+    positions = []
+    for res in residues:
+        charge = CHARGE_SCALE.get(res.get_resname(), 0)
+        sasa = getattr(res, 'sasa', 0)
+        if charge != 0 and sasa > SASA_THRESHOLD:
+            center = get_residue_center(res)
+            if center is not None:
+                charges.append(charge)
+                positions.append(center)
+    
+    if not charges:
+        return 0.0
+    
+    charges = np.array(charges)
+    positions = np.array(positions)
+    
+    total_charge = sum(charges)
+    if total_charge == 0:
+        return 0.0
+    
+    com = np.average(positions, weights=np.abs(charges))
+    dipole = sum(charges[i] * (positions[i] - com) for i in range(len(charges)))
+    return np.linalg.norm(dipole)
+
+def identify_cdr_regions(chain_residues, chain_id):
+    cdrs = []
+    for res in chain_residues:
+        res_id = res.get_id()[1]
+        if chain_id.upper() in ['H', 'A']:
+            if 26 <= res_id <= 32 or 52 <= res_id <= 56 or 95 <= res_id <= 102:
+                cdrs.append(res)
+        elif chain_id.upper() in ['L', 'B']:
+            if 24 <= res_id <= 34 or 50 <= res_id <= 56 or 89 <= res_id <= 97:
+                cdrs.append(res)
+    return cdrs
+
+def calculate_viscosity_risk_score(fab_features):
+    weight_hydro_patch = 0.3
+    weight_neg_patch = 0.2
+    weight_dipole = 0.2
+    weight_cdr_hydro = 0.15
+    weight_cdr_charge = 0.15
+    
+    hydro_patch_norm = fab_features['Fab_Max_Hydro_Patch'] / 1000
+    neg_patch_norm = fab_features['Fab_Max_Neg_Patch'] / 20
+    dipole_norm = fab_features['Fab_Charge_Dipole'] / 100
+    cdr_hydro_norm = fab_features['CDR_Hydro_SASA'] / 2000
+    cdr_charge_norm = abs(fab_features['CDR_Net_Charge']) / 10
+    
+    score = (weight_hydro_patch * hydro_patch_norm +
+             weight_neg_patch * neg_patch_norm +
+             weight_dipole * dipole_norm +
+             weight_cdr_hydro * cdr_hydro_norm +
+             weight_cdr_charge * cdr_charge_norm)
+    
+    #***NEED TO CHECK THESE THRESHOLD, COULD BE ARBITRARY
+    risk = "High" if score > 0.6 else "Moderate" if score > 0.3 else "Low"
+    return round(score, 3), risk
+
+def estimate_viscosity_vs_concentration(fab_features, concentrations=None):
+    # Estimate viscosity vs. concentration using Ross-Minton-inspired model; returns dict of η/η₀ at given concentrations (default: 50, 100, 150 mg/mL). 
+    # Based on Yadav et al. (2012): k_visc derived from surface features.
+    if concentrations is None:
+        concentrations = [50, 100, 150]     # mg/mL
+    
+    # Derive k_visc from features(empirical_weights)
+    k_visc = (0.01 * fab_features['Fab_Max_Hydro_Patch'] / 1000 +  # Hydrophobic drive
+              0.005 * fab_features['Fab_Max_Neg_Patch'] / 20 +     # Electrostatic
+              0.002 * fab_features['Fab_Charge_Dipole'] / 100)     # Anisotropy
+    
+    # Ross-Minton approximation for dilute: η/η₀ = 1 + k_visc * C
+    viscosity_ratios = {c: 1 + k_visc * c for c in concentrations}
+
+    # Flag high risk if η/η₀ > 2 at 150 mg/mL (common threshold)
+    high_risk_conc = [c for c, ratio in viscosity_ratios.items() if ratio > 2]
+    #***CHECK THE THRESHOLD
+    
+    return {
+        "Viscosity_Ratios": viscosity_ratios,
+        "High_Risk_Concentrations": high_risk_conc,
+        "k_visc": round(k_visc, 4)
+    }
 
 def extract_chain_features(structure):
     chain_features = {}
@@ -124,31 +297,41 @@ def extract_chain_features(structure):
             total_sasa = sum(getattr(res, 'sasa', 0) for res in residues)
             hydro_sasa = sum(getattr(res, 'sasa', 0) for res in residues if res.get_resname() in HYDROPHOBIC_RESIDUES)
             net_charge = sum(CHARGE_SCALE.get(res.get_resname(), 0) for res in residues)
-
-            # Max contiguous hydrophobic patch
-            max_patch_sasa = 0
-            for i in range(len(residues) - PATCH_WINDOW + 1):
-                window = residues[i:i + PATCH_WINDOW]
-                if all(r.get_resname() in HYDROPHOBIC_RESIDUES for r in window):
-                    patch_sasa = sum(getattr(r, 'sasa', 0) for r in window)
-                    max_patch_sasa = max(max_patch_sasa, patch_sasa)
-
+            
+            max_hydro_patch = calculate_spatial_hydrophobic_patches(residues)
+            max_pos_patch = calculate_spatial_pos_charge_patches(residues)
+            max_neg_patch = calculate_spatial_neg_charge_patches(residues)
+            dipole = calculate_charge_dipole_moment(residues)
+            
+            cdr_residues = identify_cdr_regions(residues, c_id)
+            cdr_hydro_sasa = sum(getattr(res, 'sasa', 0) for res in cdr_residues if res.get_resname() in HYDROPHOBIC_RESIDUES)
+            cdr_net_charge = sum(CHARGE_SCALE.get(res.get_resname(), 0) for res in cdr_residues)
+            
             chain_features[c_id] = {
                 "Total_SASA": round(total_sasa, 2),
                 "Hydro_SASA": round(hydro_sasa, 2),
                 "Net_Charge": round(net_charge, 1),
-                "Max_Hydro_Patch": round(max_patch_sasa, 2),
+                "Max_Hydro_Patch": round(max_hydro_patch, 2),
+                "Max_Pos_Patch": max_pos_patch,
+                "Max_Neg_Patch": max_neg_patch,
+                "Charge_Dipole": round(dipole, 2),
+                "CDR_Hydro_SASA": round(cdr_hydro_sasa, 2),
+                "CDR_Net_Charge": round(cdr_net_charge, 1),
                 "Num_Residues": len(residues),
             }
 
     return chain_features
 
 def aggregate_fab_features(chain_features):
-
     fab_total_sasa = sum(ch["Total_SASA"] for ch in chain_features.values())
     fab_hydro_sasa = sum(ch["Hydro_SASA"] for ch in chain_features.values())
     fab_net_charge = sum(ch["Net_Charge"] for ch in chain_features.values())
     fab_max_hydro_patch = max(ch["Max_Hydro_Patch"] for ch in chain_features.values())
+    fab_max_pos_patch = max(ch["Max_Pos_Patch"] for ch in chain_features.values())
+    fab_max_neg_patch = max(ch["Max_Neg_Patch"] for ch in chain_features.values())
+    fab_dipole = max(ch["Charge_Dipole"] for ch in chain_features.values())
+    cdr_hydro_sasa = sum(ch["CDR_Hydro_SASA"] for ch in chain_features.values())
+    cdr_net_charge = sum(ch["CDR_Net_Charge"] for ch in chain_features.values())
     total_residues = sum(ch["Num_Residues"] for ch in chain_features.values())
     
     fab_features = {
@@ -156,12 +339,23 @@ def aggregate_fab_features(chain_features):
         "Fab_Hydro_SASA": round(fab_hydro_sasa, 2),
         "Fab_Net_Charge": round(fab_net_charge, 1),
         "Fab_Max_Hydro_Patch": round(fab_max_hydro_patch, 2),
+        "Fab_Max_Pos_Patch": fab_max_pos_patch,
+        "Fab_Max_Neg_Patch": fab_max_neg_patch,
+        "Fab_Charge_Dipole": round(fab_dipole, 2),
+        "CDR_Hydro_SASA": round(cdr_hydro_sasa, 2),
+        "CDR_Net_Charge": round(cdr_net_charge, 1),
         "ChA_Length": chain_features.get("A", {}).get("Num_Residues", 0),
         "ChB_Length": chain_features.get("B", {}).get("Num_Residues", 0),
-        "Fab_Total_Residues": total_residues,        
+        "Fab_Total_Residues": total_residues,
     }
+
+    score, risk = calculate_viscosity_risk_score(fab_features)
+    fab_features["Viscosity_Risk_Score"] = score
+    fab_features["Viscosity_Risk_Category"] = risk
     
-    # Also include individual chain features if desired
+    conc_model = estimate_viscosity_vs_concentration(fab_features)
+    fab_features.update(conc_model)
+
     for c_id, feats in chain_features.items():
         for key, val in feats.items():
             fab_features[f"Ch_{c_id}_{key}"] = val
@@ -213,7 +407,7 @@ def run_3D_viscosity_analysis():
     df.drop(columns=['key'], inplace=True)
 
     # reorder columns
-    cols = ['Therapeutic', 'CH1 Isotype', 'VD LC'] + [c for c in df.columns if c not in ['Therapeutic', 'CH1 Isotype', 'VD LC']]
+    cols = ['Therapeutic', 'CH1 Isotype', 'VD LC', 'Viscosity_Risk_Score', 'Viscosity_Risk_Category'] + [c for c in df.columns if c not in ['Therapeutic', 'CH1 Isotype', 'VD LC', 'Viscosity_Risk_Score', 'Viscosity_Risk_Category']]
     df = df[cols]
 
     # save final CSV
