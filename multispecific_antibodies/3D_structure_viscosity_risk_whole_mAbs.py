@@ -223,7 +223,7 @@ def calculate_charge_dipole_moment(residues, distance_cutoff=CLUSTER_DISTANCE, s
     if total_charge == 0:
         return 0.0
     
-    com = np.average(positions, weights=np.abs(charges))
+    com = np.average(positions, weights=np.abs(charges), axis=0)
     dipole = sum(charges[i] * (positions[i] - com) for i in range(len(charges)))
     return np.linalg.norm(dipole)
 
