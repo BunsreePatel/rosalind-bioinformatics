@@ -160,16 +160,16 @@ def calculate_spatial_hydrophobic_patches(residues, distance_cutoff=CLUSTER_DIST
     
     return max(cluster_sasas.values()) if cluster_sasas else 0.0
 
-def calculate_spatial_neg_charge_patches(residues, distance_cutoff=CLUSTER_DISTANCE, sasa_threshold=SASA_THRESHOLD):
-    # Calculate charge patches using 3D spatial clustering; returns the maximum negative patch size (number of residues).
-    surface_neg = [(i, res.get_resname(), get_residue_center(res)) 
+def calculate_spatial_pos_charge_patches(residues, distance_cutoff=CLUSTER_DISTANCE, sasa_threshold=SASA_THRESHOLD):
+    # Calculate charge patches using 3D spatial clustering; returns the maximum positive patch size (number of residues).
+    surface_pos = [(i, res.get_resname(), get_residue_center(res)) 
                       for i, res in enumerate(residues) 
-                      if res.get_resname() in NEGATIVE_RESIDUES and getattr(res, 'sasa', 0) > sasa_threshold and get_residue_center(res) is not None]
+                      if res.get_resname() in POSITIVE_RESIDUES and getattr(res, 'sasa', 0) > sasa_threshold and get_residue_center(res) is not None]
     
-    if len(surface_neg) < 2:
+    if len(surface_pos) < 2:
         return 0
 
-    centers = np.array([c[2] for c in surface_neg])
+    centers = np.array([c[2] for c in surface_pos])
     #CHECK THIS FORMULA [1] OR [2]??
     if len(centers) > 1:
         Z = linkage(centers, method='single')
@@ -180,13 +180,14 @@ def calculate_spatial_neg_charge_patches(residues, distance_cutoff=CLUSTER_DISTA
     cluster_sizes = Counter(clusters)
     return max(cluster_sizes.values()) if cluster_sizes else 0
 
-def calculate_spatial_pos_charge_patches(residues, distance_cutoff=CLUSTER_DISTANCE, sasa_threshold=SASA_THRESHOLD):
-    # Calculate charge patches using 3D spatial clustering; returns the maximum positive patch size (number of residues).
-    surface_pos = [(i, res.get_resname(), get_residue_center(res)) 
+
+def calculate_spatial_neg_charge_patches(residues, distance_cutoff=CLUSTER_DISTANCE, sasa_threshold=SASA_THRESHOLD):
+    # Calculate charge patches using 3D spatial clustering; returns the maximum negative patch size (number of residues).
+    surface_neg = [(i, res.get_resname(), get_residue_center(res)) 
                       for i, res in enumerate(residues) 
-                      if res.get_resname() in POSITIVE_RESIDUES and getattr(res, 'sasa', 0) > sasa_threshold and get_residue_center(res) is not None]
+                      if res.get_resname() in NEGATIVE_RESIDUES and getattr(res, 'sasa', 0) > sasa_threshold and get_residue_center(res) is not None]
     
-    if len(surface_pos) < 2:
+    if len(surface_neg) < 2:
         return 0
 
     centers = np.array([c[2] for c in surface_neg])
